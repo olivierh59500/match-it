@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
@@ -77,6 +78,10 @@ type Game struct {
 
 	// Fonts
 	instrFace font.Face
+
+	// Splash
+	splash      *ebiten.Image
+	splashStart time.Time
 }
 
 func New() *Game {
@@ -85,12 +90,16 @@ func New() *Game {
 		log.Printf("levels: %v", err)
 	}
 	hs, _ := loadHighscores("highscores.json")
-	g := &Game{levels: ls, hs: hs, state: "menu"}
+	g := &Game{levels: ls, hs: hs, state: "splash"}
 	g.newRound()
 	g.tryLoadAtlas()
-	g.initMusic()
 	g.initFonts()
 	g.musicOn = true
+	// Load splash image if available
+	if img, err := loadPNG(filepath.Join("assets", "png", "malakhsoftware-pixel.png")); err == nil {
+		g.splash = ebiten.NewImageFromImage(img)
+	}
+	g.splashStart = time.Now()
 	return g
 }
 
@@ -174,6 +183,12 @@ func (g *Game) Update() error {
 	g.handleGlobalInput()
 	// State machine
 	switch g.state {
+	case "splash":
+		if time.Since(g.splashStart) >= 3*time.Second {
+			g.state = "menu"
+			g.initMusic()
+		}
+		return nil
 	case "menu":
 		return g.updateMenu()
 	case "highscores":
@@ -275,6 +290,15 @@ func (g *Game) Update() error {
 func (g *Game) Draw(screen *ebiten.Image) {
 	// Draw according to state
 	switch g.state {
+	case "splash":
+		screen.Fill(color.White)
+		if g.splash != nil {
+			b := g.splash.Bounds()
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(float64((640-b.Dx())/2), float64((400-b.Dy())/2))
+			screen.DrawImage(g.splash, op)
+		}
+		return
 	case "menu":
 		g.drawMenu(screen)
 		return

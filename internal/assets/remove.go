@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"os"
 )
 
@@ -16,7 +17,12 @@ func LoadRemoveMasks(path string) ([][20]uint16, error) {
 		return nil, err
 	}
 	defer f.Close()
-	img, err := png.Decode(f)
+	return DecodeRemoveMasks(f)
+}
+
+// DecodeRemoveMasks decodes the removal animation from a PNG stream.
+func DecodeRemoveMasks(r io.Reader) ([][20]uint16, error) {
+	img, err := png.Decode(r)
 	if err != nil {
 		return nil, fmt.Errorf("remove masks decode: %w", err)
 	}

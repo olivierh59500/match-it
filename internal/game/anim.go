@@ -3,9 +3,9 @@ package game
 import (
 	"image"
 	"image/draw"
-	"path/filepath"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	resources "github.com/olivierh59500/match-it/assets"
 	"github.com/olivierh59500/match-it/internal/assets"
 )
 
@@ -27,7 +27,14 @@ func (g *Game) startRemoveAnim(x1, y1, x2, y2, idx1, idx2 int) {
 	}
 	// Load masks once.
 	if g.removeMasks == nil {
-		if masks, err := assets.LoadRemoveMasks(filepath.Join("assets", "png", "remove", "removean.img.png")); err == nil {
+		f, err := resources.Files.Open("png/remove/removean.img.png")
+		if err != nil {
+			g.board.RemovePair(x1, y1, x2, y2)
+			return
+		}
+		masks, decodeErr := assets.DecodeRemoveMasks(f)
+		_ = f.Close()
+		if decodeErr == nil {
 			g.removeMasks = masks
 		} else {
 			// Fallback: no animation

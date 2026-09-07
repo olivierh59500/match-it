@@ -1,7 +1,7 @@
 package logic
 
 // Board encapsulates the 18x8 tile grid and the pos list used by the original help routine.
-// Tiles use 0 for empty, 1..42 for tile IDs.
+// Tiles use 0 for empty and 1..43 for tile IDs.
 type Board struct {
     Tiles [18 * 8]byte // row-major
     Pos   [16 * 6]byte // position list order for help/checkmate detection
@@ -61,4 +61,3 @@ func (b *Board) HelpSearch() (x1, y1, x2, y2 int, path []byte, ok bool) {
     }
     return 0, 0, 0, 0, nil, false
 }
-

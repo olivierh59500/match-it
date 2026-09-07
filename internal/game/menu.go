@@ -1,36 +1,42 @@
 package game
 
 import (
-	"github.com/hajimehoshi/ebiten/v2"
 	"image/color"
-	assets "github.com/olivierh59500/match-it/internal/assets"
-	"os"
 	"strings"
+
+	"github.com/hajimehoshi/ebiten/v2"
+	assets "github.com/olivierh59500/match-it/internal/assets"
 )
 
 func (g *Game) updateMenu() error {
-	// Mouse click regions for simple menu
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.mouseLatch {
-		g.mouseLatch = true
-		x, y := ebiten.CursorPosition()
-		// Scale back from 2x
-		mx, my := x/2, y/2
-		// Define buttons by plate rows: y bands at 37, 74, 111, 148 (height ~16)
-		if inRect(mx, my, 0, 37, 320, 16) { // Start
+	if x, y, ok := g.consumeTap(); ok {
+		switch menuItemAt(x, y) {
+		case 0:
 			g.state = "play"
 			g.startGame()
-		} else if inRect(mx, my, 0, 74, 320, 16) { // Highscores
+		case 1:
 			g.state = "highscores"
-		} else if inRect(mx, my, 0, 111, 320, 16) { // Instructions
+		case 2:
 			g.state = "instructions"
-		} else if inRect(mx, my, 0, 148, 320, 16) { // Quit
-			os.Exit(0)
+		case 3:
+			return ebiten.Termination
 		}
 	}
-	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		g.mouseLatch = false
-	}
 	return nil
+}
+
+func menuItemAt(x, y int) int {
+	if x < 0 || x >= logicalWidth {
+		return -1
+	}
+	// The artwork is 32 logical pixels tall. These larger, non-overlapping
+	// regions make every menu entry comfortable to hit with a finger.
+	for i, top := range []int{58, 132, 206, 280} {
+		if y >= top && y < top+64 {
+			return i
+		}
+	}
+	return -1
 }
 
 func (g *Game) drawMenu(screen *ebiten.Image) {

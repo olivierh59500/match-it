@@ -1,7 +1,8 @@
 package logic
 
-// Tile IDs follow the original 1..42 scheme in matchitbuff.
-// 35..38 are seasons, 39..42 are flowers. 0 means empty (no tile).
+// Tile IDs follow the original 1..43 scheme in matchitbuff.
+// 35..38 are seasons, 39..42 are flowers, and 43 is an ordinary identical
+// pair. 0 means empty (no tile).
 
 // MatchInfo returns whether two tiles can be removed and the special delay ticks (4)
 // to pause the timer when removing seasons/flowers or those equal tiles.

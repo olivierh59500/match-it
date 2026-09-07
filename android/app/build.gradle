@@ -1,0 +1,61 @@
+plugins {
+    id "com.android.application"
+}
+
+def repositoryDir = rootProject.projectDir.parentFile
+def generatedAar = layout.projectDirectory.file("libs/matchit.aar")
+
+android {
+    namespace "com.malakhsoftware.matchit"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.malakhsoftware.matchit"
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ["**/libgojni.so"]
+        }
+    }
+
+    lint {
+        // Gradle 8.13 is the version documented for AGP 8.11/API 36.
+        disable += "AndroidGradlePluginVersion"
+    }
+}
+
+tasks.register("buildEbitenAar", Exec) {
+    workingDir repositoryDir
+    commandLine "sh", new File(repositoryDir, "scripts/build-android-aar.sh").absolutePath,
+        generatedAar.asFile.absolutePath
+    inputs.files(fileTree(repositoryDir) {
+        include "go.mod", "go.sum", "assets/**", "internal/**", "mobile/**"
+        exclude "**/*_test.go"
+    })
+    outputs.file(generatedAar)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(tasks.named("buildEbitenAar"))
+}
+
+dependencies {
+    implementation files("libs/matchit.aar")
+}

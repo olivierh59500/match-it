@@ -3,6 +3,7 @@ package logic
 import (
 	"fmt"
 	"image/png"
+	"io"
 	"os"
 )
 
@@ -24,7 +25,14 @@ func LoadLevels(path string) (*LevelSet, error) {
 		return nil, err
 	}
 	defer f.Close()
-	img, err := png.Decode(f)
+	return DecodeLevels(f)
+}
+
+// DecodeLevels decodes the level table from a PNG stream. Keeping decoding
+// independent from the host filesystem allows the game to use embedded assets
+// on Android and iOS.
+func DecodeLevels(r io.Reader) (*LevelSet, error) {
+	img, err := png.Decode(r)
 	if err != nil {
 		return nil, fmt.Errorf("decode gamearea png: %w", err)
 	}

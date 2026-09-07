@@ -4,19 +4,19 @@ import (
 	"image"
 	"image/color"
 	"log"
-	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/goregular"
-	"golang.org/x/image/font/opentype"
+	resources "github.com/olivierh59500/match-it/assets"
 	assets "github.com/olivierh59500/match-it/internal/assets"
 	audiox "github.com/olivierh59500/match-it/internal/audio"
 	"github.com/olivierh59500/match-it/internal/logic"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
 )
 
 // Game implements ebiten.Game. It reproduces the original flow:
@@ -49,10 +49,7 @@ type Game struct {
 	// removal animation state
 	anim        *removeAnim
 	removeMasks [][20]uint16
-	mouseLatch  bool
-	helpLatch   bool
 
-	selOverlay *ebiten.Image
 	selActive  bool
 	selX, selY int
 
@@ -60,6 +57,13 @@ type Game struct {
 	state   string // "menu", "play", "highscores", "instructions", "entername"
 	hs      *Highscores
 	nameBuf string
+	hsPath  string
+
+	// Pointer input. Touches and mouse clicks are normalized to one logical tap
+	// per update so every screen follows the same interaction path.
+	tapAvailable bool
+	tapX, tapY   int
+	touchIDs     []ebiten.TouchID
 
 	// Music
 	audioCtx    *audio.Context
@@ -85,22 +89,45 @@ type Game struct {
 }
 
 func New() *Game {
-	ls, err := logic.LoadLevels(filepath.Join("assets", "png", "gamearea.img.png"))
+	levelFile, err := resources.Files.Open("png/gamearea.img.png")
+	var ls *logic.LevelSet
+	if err == nil {
+		ls, err = logic.DecodeLevels(levelFile)
+		_ = levelFile.Close()
+	}
 	if err != nil {
 		log.Printf("levels: %v", err)
 	}
-	hs, _ := loadHighscores("highscores.json")
-	g := &Game{levels: ls, hs: hs, state: "splash"}
+	const hsPath = "highscores.json"
+	hs, _ := loadHighscores(hsPath)
+	g := &Game{levels: ls, hs: hs, hsPath: hsPath, state: "splash"}
 	g.newRound()
 	g.tryLoadAtlas()
 	g.initFonts()
 	g.musicOn = true
 	// Load splash image if available
-	if img, err := loadPNG(filepath.Join("assets", "png", "malakhsoftware-pixel.png")); err == nil {
+	if img, err := loadPNG("png/malakhsoftware-pixel.png"); err == nil {
 		g.splash = ebiten.NewImageFromImage(img)
 	}
 	g.splashStart = time.Now()
 	return g
+}
+
+// SetDataDir switches persistent data to an application-owned directory. The
+// Android launcher calls this before the first frame because a bound Go
+// library does not have a useful project working directory.
+func (g *Game) SetDataDir(dir string) {
+	if dir == "" {
+		return
+	}
+	path := filepath.Join(dir, "highscores.json")
+	hs, err := loadHighscores(path)
+	if err != nil {
+		log.Printf("highscores: %v", err)
+		return
+	}
+	g.hsPath = path
+	g.hs = hs
 }
 
 func (g *Game) newRound() {
@@ -156,7 +183,7 @@ func (g *Game) initMusic() {
 		return
 	}
 	g.audioCtx = audio.NewContext(44100)
-	data, err := os.ReadFile("assets/music/Chambers of Shaolin - Trapped in China.ym")
+	data, err := resources.Files.ReadFile("music/Chambers of Shaolin - Trapped in China.ym")
 	if err != nil {
 		log.Printf("music load: %v", err)
 		return
@@ -179,12 +206,13 @@ func (g *Game) initMusic() {
 }
 
 func (g *Game) Update() error {
+	g.captureTap()
 	// Global input (applies to all states)
 	g.handleGlobalInput()
 	// State machine
 	switch g.state {
 	case "splash":
-		if time.Since(g.splashStart) >= 3*time.Second {
+		if time.Since(g.splashStart) >= 3*time.Second || g.consumeAnyTap() {
 			g.state = "menu"
 			g.initMusic()
 		}
@@ -200,7 +228,6 @@ func (g *Game) Update() error {
 	case "levelsummary":
 		return g.updateLevelSummary()
 	}
-	// Keyboard controls for quick testing in game: H for help, R to restart.
 	g.frames++
 	// Timer: decrement time per timeDelay frames, pause for blumHold counts (and paused state)
 	if g.state == "play" && !g.paused && g.timeLeft > 0 {
@@ -217,44 +244,8 @@ func (g *Game) Update() error {
 			}
 		}
 	}
-	if g.state == "play" && ebiten.IsKeyPressed(ebiten.KeyR) {
-		g.newRound()
-	}
-	if g.state == "play" && !g.paused && ebiten.IsKeyPressed(ebiten.KeyH) && !g.helpLatch {
-		g.helpLatch = true
-		if g.helpCount > 0 {
-			x1, y1, x2, y2, p, ok := g.board.HelpSearch()
-			if ok {
-				g.path = p
-				g.pathFromX, g.pathFromY = x1, y1
-				g.pathToX, g.pathToY = x2, y2
-				g.pathTimer = 15
-				g.helpCount--
-				g.helpUsed = true
-				// start removal animation preview
-				if g.atlas != nil && g.atlas.Tiles != nil {
-					idx1 := int(g.board.Get(x1, y1) - 1)
-					idx2 := int(g.board.Get(x2, y2) - 1)
-					g.startRemoveAnim(x1, y1, x2, y2, idx1, idx2)
-				}
-			}
-		}
-	}
-	if !ebiten.IsKeyPressed(ebiten.KeyH) {
-		g.helpLatch = false
-	}
-	// ESC to menu during play
-	if g.state == "play" && inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
-		g.state = "menu"
-	}
-	// Pause toggle (P) during play
-	if g.state == "play" && inpututil.IsKeyJustPressed(ebiten.KeyP) {
-		g.paused = !g.paused
-	}
-	// Music toggle handled globally
-	// Mouse input
-	if g.state == "play" && !g.paused {
-		g.handleMouse()
+	if g.state == "play" {
+		g.updatePlayInput()
 	}
 
 	// Animate removal if active
@@ -339,7 +330,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				if v == 0 {
 					continue
 				}
-				// IDs in board are 1..42 => atlas index v-1
+				// IDs in board are 1..43 => atlas index v-1
 				idx := int(v - 1)
 				if idx >= 0 && idx < len(g.atlas.Tiles) {
 					op := &ebiten.DrawImageOptions{}
@@ -356,13 +347,6 @@ func (g *Game) Draw(screen *ebiten.Image) {
 						screen.DrawImage(img, op)
 					} else {
 						screen.DrawImage(ebiten.NewImageFromImage(g.atlas.Tiles[idx]), op)
-					}
-					// Selection highlight overlay: thin border, semi-transparent
-					if g.selActive && x == g.selX && y == g.selY {
-						if g.selOverlay == nil {
-							g.selOverlay = makeSelectionOverlay(tileW, tileH, color.RGBA{255, 255, 0, 96})
-						}
-						screen.DrawImage(g.selOverlay, op)
 					}
 				}
 			}
@@ -399,8 +383,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				prev = dir
 			}
 		}
+		// Keep selected endpoints above both the tiles and path so selection is
+		// unmistakable on small, bright mobile screens.
+		if g.anim != nil {
+			g.drawTileSelection(screen, g.anim.x1, g.anim.y1, "1", false)
+			g.drawTileSelection(screen, g.anim.x2, g.anim.y2, "2", false)
+		} else if g.selActive {
+			g.drawTileSelection(screen, g.selX, g.selY, "1", true)
+		}
 		// HUD: draw score, time, helps using FONT2 digits and help plates
 		g.drawHUD(screen)
+		g.drawPlayControls(screen)
 	}
 	// No debug text; HUD to be implemented via original assets
 }
@@ -408,7 +401,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
 	// Use a fixed logical size so Ebiten scales the backbuffer to the window size.
 	// This makes the whole game zoom with window resizing.
-	return 640, 400
+	return logicalWidth, logicalHeight
 }
 
 // itoa2 prints a small 2-digit tile id.
@@ -630,21 +623,6 @@ func (g *Game) smallTextWidth(s string, spacing int) int {
 	return w
 }
 
-// makeSelectionOverlay builds a thin border rectangle image.
-func makeSelectionOverlay(w, h int, c color.RGBA) *ebiten.Image {
-	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
-	// 1px border
-	for x := 0; x < w; x++ {
-		rgba.SetRGBA(x, 0, c)
-		rgba.SetRGBA(x, h-1, c)
-	}
-	for y := 0; y < h; y++ {
-		rgba.SetRGBA(0, y, c)
-		rgba.SetRGBA(w-1, y, c)
-	}
-	return ebiten.NewImageFromImage(rgba)
-}
-
 // handleGlobalInput processes inputs that should affect all states (e.g., music toggle).
 func (g *Game) handleGlobalInput() {
 	// Music toggle (M/m): mute/unmute by volume across all screens
@@ -655,20 +633,27 @@ func (g *Game) handleGlobalInput() {
 			break
 		}
 	}
-	if toggle && g.ym != nil {
-		if g.musicOn {
-			g.prevVol = g.ym.GetVolume()
-			g.ym.SetVolume(0)
-			g.musicOn = false
-		} else {
-			v := g.prevVol
-			if v <= 0 {
-				v = 0.7
-			}
-			g.ym.SetVolume(v)
-			g.musicOn = true
-		}
+	if toggle {
+		g.toggleMusic()
 	}
+}
+
+func (g *Game) toggleMusic() {
+	if g.ym == nil {
+		return
+	}
+	if g.musicOn {
+		g.prevVol = g.ym.GetVolume()
+		g.ym.SetVolume(0)
+		g.musicOn = false
+		return
+	}
+	v := g.prevVol
+	if v <= 0 {
+		v = 0.7
+	}
+	g.ym.SetVolume(v)
+	g.musicOn = true
 }
 
 // drawChars8Centered draws a line of text using the original chars8 font at scale and spacing, centered at given y.

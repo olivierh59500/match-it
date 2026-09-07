@@ -3,33 +3,30 @@ package game
 import (
 	"image"
 	"image/color"
+	"log"
 	"strings"
 	"unicode"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
+	assets "github.com/olivierh59500/match-it/internal/assets"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
-	assets "github.com/olivierh59500/match-it/internal/assets"
 )
 
 func (g *Game) updateHighscores() error {
-	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.mouseLatch {
-		g.mouseLatch = true
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || g.consumeAnyTap() {
 		g.state = "menu"
-	}
-	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		g.mouseLatch = false
 	}
 	return nil
 }
 
 // Level summary (between stages)
 func (g *Game) updateLevelSummary() error {
-	// Any click or Enter continues to next stage
-	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || (ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.mouseLatch) {
-		g.mouseLatch = true
+	// Any tap or Enter continues to the next stage.
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || g.consumeAnyTap() {
 		// Apply bonuses
 		g.score += g.pendingTimeBonus
 		g.score += g.pendingHelpBonus
@@ -45,9 +42,6 @@ func (g *Game) updateLevelSummary() error {
 		g.stage++
 		g.newRound()
 		g.state = "play"
-	}
-	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		g.mouseLatch = false
 	}
 	return nil
 }
@@ -121,12 +115,8 @@ func (g *Game) drawLabelValueCenteredST(screen *ebiten.Image, label string, valu
 }
 
 func (g *Game) updateInstructions() error {
-	if ebiten.IsKeyPressed(ebiten.KeyEscape) || ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) && !g.mouseLatch {
-		g.mouseLatch = true
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || g.consumeAnyTap() {
 		g.state = "menu"
-	}
-	if !ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		g.mouseLatch = false
 	}
 	return nil
 }
@@ -141,7 +131,9 @@ func (g *Game) drawInstructions(screen *ebiten.Image) {
 		"SEASONS MATCH WITH SEASONS.",
 		"FLOWERS MATCH WITH FLOWERS.",
 		"A PATH WITH AT MOST TWO TURNS MUST CONNECT THE TWO TILES.",
-		"CLICK TWO TILES OR PRESS H FOR HELP.",
+		"TOUCH OR CLICK TWO TILES. TAP THE HELP COUNTER FOR A HINT.",
+		"USE THE BOTTOM BAR FOR MENU, PAUSE, RESTART, AND MUSIC.",
+		"TOUCH ANYWHERE TO RETURN.",
 	}
 	// Use a readable system-safe font (Goregular at 16px) and center in both axes.
 	face := g.instrFace
@@ -260,8 +252,66 @@ func drawDigits(screen *ebiten.Image, digits [10]*image.RGBA, val int, x, y, max
 	}
 }
 
-// Enter-name state: keyboard name input and save
+type nameKey struct {
+	label string
+	value string
+	rect  image.Rectangle
+}
+
+var nameKeys = buildNameKeys()
+
+func buildNameKeys() []nameKey {
+	const (
+		keyWidth  = 50
+		keyHeight = 44
+		keyGap    = 6
+	)
+	rows := []struct {
+		letters string
+		y       int
+	}{
+		{"QWERTYUIOP", 105},
+		{"ASDFGHJKL", 155},
+		{"ZXCVBNM", 205},
+		{"1234567890", 255},
+	}
+	keys := make([]nameKey, 0, 39)
+	for _, row := range rows {
+		width := len(row.letters)*keyWidth + (len(row.letters)-1)*keyGap
+		x := (logicalWidth - width) / 2
+		for _, letter := range row.letters {
+			keys = append(keys, nameKey{
+				label: string(letter),
+				value: string(letter),
+				rect:  image.Rect(x, row.y, x+keyWidth, row.y+keyHeight),
+			})
+			x += keyWidth + keyGap
+		}
+	}
+	keys = append(keys,
+		nameKey{label: "SPACE", value: " ", rect: image.Rect(43, 307, 347, 357)},
+		nameKey{label: "DELETE", value: "\b", rect: image.Rect(353, 307, 477, 357)},
+		nameKey{label: "OK", value: "\n", rect: image.Rect(483, 307, 597, 357)},
+	)
+	return keys
+}
+
+func nameKeyAt(x, y int) (string, bool) {
+	point := image.Pt(x, y)
+	for _, key := range nameKeys {
+		if point.In(key.rect) {
+			return key.value, true
+		}
+	}
+	return "", false
+}
+
+// Enter-name state: physical or on-screen keyboard input and save.
 func (g *Game) updateEnterName() error {
+	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		g.state = "menu"
+		return nil
+	}
 	// Read typed characters (debounced by Ebiten), accept letters/digits/space
 	for _, r := range ebiten.InputChars() {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' {
@@ -272,28 +322,55 @@ func (g *Game) updateEnterName() error {
 		g.nameBuf = g.nameBuf[:len(g.nameBuf)-1]
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) && len(g.nameBuf) > 0 {
-		g.hs.submit(ScoreEntry{Name: g.nameBuf, Score: g.score})
-		_ = saveHighscores("highscores.json", g.hs)
-		g.state = "highscores"
+		g.submitEnteredName()
+		return nil
+	}
+	if x, y, ok := g.consumeTap(); ok {
+		if value, hit := nameKeyAt(x, y); hit {
+			switch value {
+			case "\b":
+				if len(g.nameBuf) > 0 {
+					g.nameBuf = g.nameBuf[:len(g.nameBuf)-1]
+				}
+			case "\n":
+				if len(g.nameBuf) > 0 {
+					g.submitEnteredName()
+				}
+			default:
+				g.appendName([]rune(value)[0])
+			}
+		}
 	}
 	return nil
 }
 
+func (g *Game) submitEnteredName() {
+	g.hs.submit(ScoreEntry{Name: g.nameBuf, Score: g.score})
+	if err := saveHighscores(g.hsPath, g.hs); err != nil {
+		log.Printf("save highscores: %v", err)
+	}
+	g.state = "highscores"
+}
+
 func (g *Game) drawEnterName(screen *ebiten.Image) {
-	// Use same green as menu
 	screen.Fill(assets.STWordToRGBA(0x0020))
-	prompt := "ENTER YOUR NAME:"
-	name := strings.ToUpper(g.nameBuf)
-	// Center vertically in ST units: two lines (prompt + name)
-	lineH := 15
-	vgap := 5
-	totalH := 2*lineH + vgap
-	y := (200 - totalH) / 2
-	// Prompt centered
-	g.drawText(screen, prompt, (320-len(prompt)*16)/2, y)
-	// Name centered below
-	y += lineH + vgap
-	g.drawText(screen, name, (320-len(name)*16)/2, y)
+	prompt := "ENTER YOUR NAME"
+	g.drawText(screen, prompt, (320-len(prompt)*16)/2, 8)
+	name := strings.ToUpper(g.nameBuf) + "_"
+	g.drawText(screen, name, (320-len(name)*16)/2, 34)
+	g.drawNameKeyboard(screen)
+}
+
+func (g *Game) drawNameKeyboard(screen *ebiten.Image) {
+	for _, key := range nameKeys {
+		x := float32(key.rect.Min.X)
+		y := float32(key.rect.Min.Y)
+		w := float32(key.rect.Dx())
+		h := float32(key.rect.Dy())
+		vector.DrawFilledRect(screen, x, y, w, h, color.RGBA{225, 225, 235, 255}, false)
+		vector.DrawFilledRect(screen, x+2, y+2, w-4, h-4, color.RGBA{45, 45, 70, 255}, false)
+		g.drawSystemTextCenteredInRect(screen, key.label, key.rect.Min.X, key.rect.Min.Y, key.rect.Dx(), key.rect.Dy(), color.White)
+	}
 }
 
 func (g *Game) appendName(r rune) {

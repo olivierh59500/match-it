@@ -1,7 +1,7 @@
 package game
 
 import (
-	"image"
+	"bytes"
 	"image/color"
 	"log"
 	"path/filepath"
@@ -10,16 +10,22 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	resources "github.com/olivierh59500/match-it/assets"
 	assets "github.com/olivierh59500/match-it/internal/assets"
 	audiox "github.com/olivierh59500/match-it/internal/audio"
 	"github.com/olivierh59500/match-it/internal/logic"
-	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/goregular"
-	"golang.org/x/image/font/opentype"
 )
 
 const audioSampleRate = 48000
+
+type cachedMove struct {
+	x1, y1 int
+	x2, y2 int
+	path   []byte
+	ok     bool
+}
 
 // Game implements ebiten.Game. It reproduces the original flow:
 // menu -> gameplay (single player) -> highscores/instructions (later). For now, we focus on gameplay.
@@ -38,19 +44,21 @@ type Game struct {
 	// Path overlay
 	path                 []byte
 	pathFromX, pathFromY int
-	pathToX, pathToY     int
 	pathTimer            int // frames to display the overlay
+	availableMove        cachedMove
+	remainingTiles       int
 
 	// Art assets (optional)
-	atlas *atlas
+	atlas            *atlas
+	boardCanvas      *ebiten.Image
+	boardCanvasDirty bool
 
 	// simple timers
 	frames   int
 	helpUsed bool
 
 	// removal animation state
-	anim        *removeAnim
-	removeMasks [][20]uint16
+	anim *removeAnim
 
 	selActive  bool
 	selX, selY int
@@ -66,6 +74,7 @@ type Game struct {
 	tapAvailable bool
 	tapX, tapY   int
 	touchIDs     []ebiten.TouchID
+	inputChars   []rune
 
 	// Music
 	audioCtx    *audio.Context
@@ -82,7 +91,9 @@ type Game struct {
 	pendingHelpBonus int
 
 	// Fonts
-	instrFace font.Face
+	instrFace         text.Face
+	instructionLines  []string
+	instructionWidths []int
 
 	// Splash
 	splash      *ebiten.Image
@@ -149,6 +160,40 @@ func (g *Game) newRound() {
 	g.frames = 0
 	g.helpUsed = false
 	g.selActive = false
+	g.anim = nil
+	g.boardCanvasDirty = true
+	g.remainingTiles = 0
+	for _, tile := range g.board.Tiles {
+		if tile != 0 {
+			g.remainingTiles++
+		}
+	}
+	g.refreshAvailableMove()
+}
+
+func (g *Game) refreshAvailableMove() {
+	if g.remainingTiles == 0 {
+		g.availableMove = cachedMove{}
+		return
+	}
+	x1, y1, x2, y2, path, ok := g.board.HelpSearch()
+	g.availableMove = cachedMove{x1: x1, y1: y1, x2: x2, y2: y2, path: path, ok: ok}
+}
+
+func (g *Game) commitPair(x1, y1, x2, y2 int) {
+	if g.board.Get(x1, y1) == 0 || g.board.Get(x2, y2) == 0 {
+		g.anim = nil
+		return
+	}
+	g.board.RemovePair(x1, y1, x2, y2)
+	g.remainingTiles -= 2
+	if g.remainingTiles < 0 {
+		g.remainingTiles = 0
+	}
+	g.score++
+	g.anim = nil
+	g.boardCanvasDirty = true
+	g.refreshAvailableMove()
 }
 
 // startGame resets global game stats and begins a new board.
@@ -208,6 +253,7 @@ func (g *Game) initMusic() {
 
 func (g *Game) Update() error {
 	g.captureTap()
+	g.inputChars = ebiten.AppendInputChars(g.inputChars[:0])
 	// Global input (applies to all states)
 	g.handleGlobalInput()
 	// State machine
@@ -252,12 +298,9 @@ func (g *Game) Update() error {
 	// Animate removal if active
 	if g.state == "play" && !g.paused && g.anim != nil {
 		g.anim.frame++
-		if g.anim.frame >= g.anim.frames {
+		if g.anim.frame >= removeFrameCount {
 			// Commit removal to board and end anim
-			g.board.RemovePair(g.anim.x1, g.anim.y1, g.anim.x2, g.anim.y2)
-			// Increment score per removed pair (matches original addq.w #1,score)
-			g.score++
-			g.anim = nil
+			g.commitPair(g.anim.x1, g.anim.y1, g.anim.x2, g.anim.y2)
 		}
 	}
 	// Advance to level summary if cleared
@@ -271,10 +314,8 @@ func (g *Game) Update() error {
 		g.pathTimer--
 	}
 	// Checkmate: no more possible pairs -> game over
-	if g.state == "play" && !g.paused {
-		if _, _, _, _, _, ok := g.board.HelpSearch(); !ok {
-			g.onGameOver()
-		}
+	if g.state == "play" && !g.paused && g.anim == nil && g.remainingTiles > 0 && !g.availableMove.ok {
+		g.onGameOver()
 	}
 	return nil
 }
@@ -307,55 +348,15 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.drawLevelSummary(screen)
 		return
 	}
-	// Temporary: blank background if assets missing.
-	screen.Fill(color.RGBA{0, 0, 32, 255})
 	if g.atlas != nil && g.atlas.Tiles != nil {
-		// Draw background plates if available (scaled 2x)
-		if g.atlas.BGTop != nil {
-			op := &ebiten.DrawImageOptions{}
-			op.GeoM.Scale(2, 2)
-			screen.DrawImage(ebiten.NewImageFromImage(g.atlas.BGTop), op)
-		}
-		if g.atlas.BGArea != nil {
-			op := &ebiten.DrawImageOptions{}
-			op.GeoM.Scale(2, 2)
-			op.GeoM.Translate(0, float64(17*2))
-			screen.DrawImage(ebiten.NewImageFromImage(g.atlas.BGArea), op)
-		}
-		// Render tiles using atlas; ST offsets: x=16 + 16*x, y=24 + 20*y (scaled 2x)
-		const originX, originY = 16, 24
-		const tileW, tileH = 16, 20
-		for y := 0; y < 8; y++ {
-			for x := 0; x < 18; x++ {
-				v := g.board.Get(x, y)
-				if v == 0 {
-					continue
-				}
-				// IDs in board are 1..43 => atlas index v-1
-				idx := int(v - 1)
-				if idx >= 0 && idx < len(g.atlas.Tiles) {
-					op := &ebiten.DrawImageOptions{}
-					op.GeoM.Scale(2, 2)
-					op.GeoM.Translate(float64((originX+x*tileW)*2), float64((originY+y*tileH)*2))
-					// If animating and this cell is part of anim, draw masked frame instead of full tile
-					if g.anim != nil && ((x == g.anim.x1 && y == g.anim.y1) || (x == g.anim.x2 && y == g.anim.y2)) {
-						var img *ebiten.Image
-						if x == g.anim.x1 && y == g.anim.y1 {
-							img = g.anim.img1[g.anim.frame]
-						} else {
-							img = g.anim.img2[g.anim.frame]
-						}
-						screen.DrawImage(img, op)
-					} else {
-						screen.DrawImage(ebiten.NewImageFromImage(g.atlas.Tiles[idx]), op)
-					}
-				}
-			}
+		g.drawBoardBase(screen)
+		if g.anim != nil {
+			drawTileImage(screen, g.atlas.RemovalFrames[g.anim.tile1][g.anim.frame], g.anim.x1, g.anim.y1)
+			drawTileImage(screen, g.atlas.RemovalFrames[g.anim.tile2][g.anim.frame], g.anim.x2, g.anim.y2)
 		}
 		// Path overlay using last 6 sprites (indices 43..48)
 		if g.pathTimer > 0 && len(g.path) > 0 && len(g.atlas.Tiles) >= 49 {
 			px, py := g.pathFromX, g.pathFromY
-			prev := 0
 			for i := 0; i < len(g.path); i++ {
 				dir := int(g.path[i])
 				// move into next cell
@@ -373,15 +374,14 @@ func (g *Game) Draw(screen *ebiten.Image) {
 				if i+1 < len(g.path) {
 					next = int(g.path[i+1])
 				}
-				glyph := pathGlyphIndex(prev, dir, next)
+				glyph := pathGlyphIndex(dir, next)
 				idx := 43 + glyph
-				if idx >= 43 && idx < 49 {
+				if idx >= 43 && idx < 49 && g.atlas.Tiles[idx] != nil {
 					op := &ebiten.DrawImageOptions{}
 					op.GeoM.Scale(2, 2)
-					op.GeoM.Translate(float64((originX+px*tileW)*2), float64((originY+py*tileH)*2))
-					screen.DrawImage(ebiten.NewImageFromImage(g.atlas.Tiles[idx]), op)
+					op.GeoM.Translate(float64(boardOriginX+px*boardTileW), float64(boardOriginY+py*boardTileH))
+					screen.DrawImage(g.atlas.Tiles[idx], op)
 				}
-				prev = dir
 			}
 		}
 		// Keep selected endpoints above both the tiles and path so selection is
@@ -395,8 +395,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		// HUD: draw score, time, helps using FONT2 digits and help plates
 		g.drawHUD(screen)
 		g.drawPlayControls(screen)
+		return
 	}
-	// No debug text; HUD to be implemented via original assets
+	screen.Fill(color.RGBA{0, 0, 32, 255})
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -413,10 +414,10 @@ func itoa2(b byte) string {
 	return string([]byte{'0' + (b / 10), '0' + (b % 10)})
 }
 
-// pathGlyphIndex maps (prev, curr, next) directions to glyph index 0..5 located at tile indices 43..48.
+// pathGlyphIndex maps current and next directions to glyph index 0..5 located at tile indices 43..48.
 // Encoding per original:
 // 0: horizontal, 1: vertical, 2..5: corners (see draw_weg logic)
-func pathGlyphIndex(prev, curr, next int) int {
+func pathGlyphIndex(curr, next int) int {
 	switch curr {
 	case 1: // right
 		switch next {
@@ -455,12 +456,7 @@ func pathGlyphIndex(prev, curr, next int) int {
 }
 
 func (g *Game) isCleared() bool {
-	for _, v := range g.board.Tiles {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
+	return g.remainingTiles == 0
 }
 
 // drawHUD renders score (X=3,Y=1), time (X=10,Y=1), and help plate at X=256px,Y=0 using scaled coordinates.
@@ -480,14 +476,14 @@ func (g *Game) drawHUD(screen *ebiten.Image) {
 		op := &ebiten.DrawImageOptions{}
 		for i := 0; i < len(s); i++ {
 			d := s[i] - '0'
-			if d < 0 || d > 9 {
+			if d > 9 {
 				continue
 			}
 			op.GeoM.Reset()
 			op.GeoM.Scale(2, 2)
 			op.GeoM.Translate(float64(x16*2+i*16*2), float64(y*2))
 			if g.state == "play" { // show HUD only during game
-				screen.DrawImage(ebiten.NewImageFromImage(g.atlas.Digits[int(d)]), op)
+				screen.DrawImage(g.atlas.Digits[int(d)], op)
 			}
 		}
 	}
@@ -510,27 +506,24 @@ func (g *Game) drawHUD(screen *ebiten.Image) {
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Scale(2, 2)
 		op.GeoM.Translate(float64(256*2), 0)
-		screen.DrawImage(ebiten.NewImageFromImage(g.atlas.HelpPlates[idx]), op)
+		screen.DrawImage(g.atlas.HelpPlates[idx], op)
 	}
 }
 
 // initFonts loads a readable system-safe font for instructions and other UI text.
 func (g *Game) initFonts() {
-	ft, err := opentype.Parse(goregular.TTF)
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
 	if err != nil {
-		log.Printf("font parse: %v", err)
+		log.Printf("font source: %v", err)
 		return
 	}
-	face, err := opentype.NewFace(ft, &opentype.FaceOptions{
-		Size:    16,
-		DPI:     72,
-		Hinting: font.HintingFull,
-	})
-	if err != nil {
-		log.Printf("font face: %v", err)
-		return
-	}
+	face := &text.GoTextFace{Source: source, Size: 16}
 	g.instrFace = face
+	g.instructionLines = wrapFace(instructionParagraphs, face, 600)
+	g.instructionWidths = make([]int, len(g.instructionLines))
+	for i, line := range g.instructionLines {
+		g.instructionWidths[i] = measureFace(face, line)
+	}
 }
 
 // itoaDec converts int to decimal string without leading zeros.
@@ -575,60 +568,18 @@ func (g *Game) drawText(screen *ebiten.Image, s string, x, y int) {
 				op := &ebiten.DrawImageOptions{}
 				op.GeoM.Scale(2, 2)
 				op.GeoM.Translate(float64(xx*2), float64(y*2))
-				screen.DrawImage(ebiten.NewImageFromImage(img), op)
+				screen.DrawImage(img, op)
 			}
 		}
 		xx += 16
 	}
 }
 
-// drawSmallText draws text using the menu font at 1x scale (not 2x), to approximate the small instruction font.
-func (g *Game) drawSmallText(screen *ebiten.Image, s string, x, y int, spacing int) {
-	if g.atlas == nil || len(g.atlas.Font47) == 0 {
-		return
-	}
-	xx := x
-	for _, r := range s {
-		if r == ' ' {
-			xx += 8 + spacing
-			continue
-		}
-		idx := assets.FontIndexForChar(r)
-		if idx >= 0 && idx < len(g.atlas.Font47) {
-			img := g.atlas.Font47[idx]
-			if img != nil {
-				op := &ebiten.DrawImageOptions{}
-				// scale down to ~8px width by scaling 0.5
-				op.GeoM.Scale(0.5, 0.5)
-				op.GeoM.Translate(float64(xx), float64(y))
-				screen.DrawImage(ebiten.NewImageFromImage(img), op)
-			}
-		}
-		xx += 8 + spacing
-	}
-}
-
-// smallTextWidth returns the pixel width of the small text with given spacing.
-func (g *Game) smallTextWidth(s string, spacing int) int {
-	w := 0
-	for _, r := range s {
-		if r == ' ' {
-			w += 8 + spacing
-		} else if assets.FontIndexForChar(r) >= 0 {
-			w += 8 + spacing
-		}
-	}
-	if w > 0 {
-		w -= spacing
-	}
-	return w
-}
-
 // handleGlobalInput processes inputs that should affect all states (e.g., music toggle).
 func (g *Game) handleGlobalInput() {
 	// Music toggle (M/m): mute/unmute by volume across all screens
 	toggle := inpututil.IsKeyJustPressed(ebiten.KeyM)
-	for _, r := range ebiten.InputChars() {
+	for _, r := range g.inputChars {
 		if r == 'm' || r == 'M' {
 			toggle = true
 			break
@@ -650,73 +601,4 @@ func (g *Game) toggleMusic() {
 	}
 	g.audioPlayer.SetVolume(1)
 	g.musicOn = true
-}
-
-// drawChars8Centered draws a line of text using the original chars8 font at scale and spacing, centered at given y.
-func (g *Game) drawChars8Centered(screen *ebiten.Image, s string, y int, spacing int, scale int) {
-	img, w, _ := g.renderChars8Line(s, spacing, scale)
-	if img == nil {
-		return
-	}
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(float64((640-w)/2), float64(y))
-	screen.DrawImage(img, op)
-}
-
-// renderChars8Line renders a single line of chars8 text into an offscreen image and returns it with width/height.
-func (g *Game) renderChars8Line(s string, spacing, scale int) (*ebiten.Image, int, int) {
-	if g.atlas == nil || g.atlas.CharSheet == nil {
-		return nil, 0, 0
-	}
-	// measure width
-	w := 0
-	for range s {
-		w += (8 + spacing) * scale
-	}
-	if len(s) > 0 {
-		w -= spacing * scale
-	}
-	if w <= 0 {
-		w = 1
-	}
-	h := 8 * scale
-	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
-	x := 0
-	for _, r := range s {
-		if r == ' ' {
-			x += (8 + spacing) * scale
-			continue
-		}
-		// chars8 encodes 64 glyphs laid out in ASCII order starting at space (0x20)
-		c := int(r) - 32 // map ASCII to glyph index (space=0)
-		if c < 0 || c >= 64 {
-			x += (8 + spacing) * scale
-			continue
-		}
-		col := c & 31
-		blk := (c >> 5) & 0x7
-		x0 := col * 8
-		y0 := blk * 8
-		for row := 0; row < 8; row++ {
-			yy := y0 + row
-			if yy < 0 || yy >= g.atlas.CharSheet.Bounds().Dy() {
-				continue
-			}
-			for bit := 0; bit < 8; bit++ {
-				xx := x0 + bit
-				if xx < 0 || xx >= g.atlas.CharSheet.Bounds().Dx() {
-					continue
-				}
-				if g.atlas.CharSheet.RGBAAt(xx, yy).A > 0 {
-					for dy := 0; dy < scale; dy++ {
-						for dx := 0; dx < scale; dx++ {
-							rgba.Set(x+bit*scale+dx, row*scale+dy, color.White)
-						}
-					}
-				}
-			}
-		}
-		x += (8 + spacing) * scale
-	}
-	return ebiten.NewImageFromImage(rgba), w, h
 }

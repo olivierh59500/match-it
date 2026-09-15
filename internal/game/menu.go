@@ -1,7 +1,6 @@
 package game
 
 import (
-	"image/color"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -50,7 +49,7 @@ func (g *Game) drawMenu(screen *ebiten.Image) {
 			op := &ebiten.DrawImageOptions{}
 			op.GeoM.Scale(2, 2)
 			op.GeoM.Translate(0, float64(yy*2))
-			screen.DrawImage(ebiten.NewImageFromImage(g.atlas.MenuPlate), op)
+			screen.DrawImage(g.atlas.MenuPlate, op)
 		}
 	}
 	// Title at top center
@@ -65,17 +64,4 @@ func (g *Game) drawMenu(screen *ebiten.Image) {
 		x := (320 - width) / 2
 		g.drawText(screen, strings.ToUpper(label), x, labelY[i])
 	}
-}
-
-func inRect(x, y, rx, ry, rw, rh int) bool {
-	return x >= rx && y >= ry && x < rx+rw && y < ry+rh
-}
-
-func drawBtn(screen *ebiten.Image, x, y, w, h int) {
-	img := ebiten.NewImage(w, h)
-	img.Fill(color.RGBA{60, 60, 90, 150})
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(2, 2)
-	op.GeoM.Translate(float64(x*2), float64(y*2))
-	screen.DrawImage(img, op)
 }

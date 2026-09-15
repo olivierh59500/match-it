@@ -2,23 +2,9 @@ package assets
 
 import (
 	"fmt"
-	"image"
-	"image/color"
 	"image/png"
 	"io"
-	"os"
 )
-
-// LoadRemoveMasks reads REMOVEAN.IMG which contains 15 frames of 20-word masks.
-// Each frame has 20 scanlines; each word has 16 bits mapping to 16 pixels (MSB=leftmost).
-func LoadRemoveMasks(path string) ([][20]uint16, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return DecodeRemoveMasks(f)
-}
 
 // DecodeRemoveMasks decodes the removal animation from a PNG stream.
 func DecodeRemoveMasks(r io.Reader) ([][20]uint16, error) {
@@ -48,21 +34,4 @@ func DecodeRemoveMasks(r io.Reader) ([][20]uint16, error) {
 		}
 	}
 	return masks, nil
-}
-
-// MaskImage generates a 16x20 alpha image from a 20-word mask (1=opaque, 0=transparent).
-func MaskImage(mask *[20]uint16) *image.Alpha {
-	img := image.NewAlpha(image.Rect(0, 0, 16, 20))
-	for y := 0; y < 20; y++ {
-		m := mask[y]
-		for x := 0; x < 16; x++ {
-			bit := (m >> (15 - x)) & 1
-			if bit != 0 {
-				img.SetAlpha(x, y, color.Alpha{A: 0xFF})
-			} else {
-				img.SetAlpha(x, y, color.Alpha{A: 0x00})
-			}
-		}
-	}
-	return img
 }

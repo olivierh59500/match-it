@@ -14,8 +14,9 @@ func main() {
 	ebiten.SetWindowTitle("Match'it (Go + Ebiten)")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowSize(640, 400) // 2x ST resolution for clarity
+	ebiten.SetScreenClearedEveryFrame(false)
 
-	if err := ebiten.RunGame(g); err != nil {
+	if err := ebiten.RunGame(newDrawOnUpdateGame(g)); err != nil {
 		log.Fatal(err)
 	}
 }

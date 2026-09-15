@@ -5,11 +5,9 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/olivierh59500/match-it/internal/logic"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
 )
 
 const (
@@ -145,24 +143,18 @@ func (g *Game) updatePlayInput() {
 }
 
 func (g *Game) useHelp() {
-	if g.helpCount <= 0 || g.anim != nil {
+	if g.helpCount <= 0 || g.anim != nil || !g.availableMove.ok {
 		return
 	}
-	x1, y1, x2, y2, path, ok := g.board.HelpSearch()
-	if !ok {
-		return
-	}
-	g.path = path
-	g.pathFromX, g.pathFromY = x1, y1
-	g.pathToX, g.pathToY = x2, y2
+	move := g.availableMove
+	g.path = append(g.path[:0], move.path...)
+	g.pathFromX, g.pathFromY = move.x1, move.y1
 	g.pathTimer = 15
 	g.helpCount--
 	g.helpUsed = true
-	if g.atlas != nil && g.atlas.Tiles != nil {
-		idx1 := int(g.board.Get(x1, y1) - 1)
-		idx2 := int(g.board.Get(x2, y2) - 1)
-		g.startRemoveAnim(x1, y1, x2, y2, idx1, idx2)
-	}
+	tile1 := int(g.board.Get(move.x1, move.y1) - 1)
+	tile2 := int(g.board.Get(move.x2, move.y2) - 1)
+	g.startRemoveAnim(move.x1, move.y1, move.x2, move.y2, tile1, tile2)
 }
 
 // handleBoardTap performs tile selection and pair removal for a logical screen
@@ -191,18 +183,10 @@ func (g *Game) handleBoardTap(x, y int) {
 
 	vSel := g.board.Get(g.selX, g.selY)
 	if matches, delay := logic.MatchInfo(vSel, vCur); matches {
-		var path []byte
-		if logic.FindPath(g.board.Tiles, g.selX, g.selY, bx, by, &path) {
-			g.path = path
+		if logic.FindPath(g.board.Tiles, g.selX, g.selY, bx, by, &g.path) {
 			g.pathFromX, g.pathFromY = g.selX, g.selY
-			g.pathToX, g.pathToY = bx, by
 			g.pathTimer = 15
-			if g.atlas != nil && g.atlas.Tiles != nil {
-				g.startRemoveAnim(g.selX, g.selY, bx, by, int(vSel-1), int(vCur-1))
-			} else {
-				g.board.RemovePair(g.selX, g.selY, bx, by)
-				g.score++
-			}
+			g.startRemoveAnim(g.selX, g.selY, bx, by, int(vSel-1), int(vCur-1))
 			if delay > 0 {
 				g.blumHold += delay
 			}
@@ -216,11 +200,11 @@ func (g *Game) handleBoardTap(x, y int) {
 
 func (g *Game) drawPlayControls(screen *ebiten.Image) {
 	if g.paused {
-		vector.DrawFilledRect(screen, 0, boardOriginY, logicalWidth, playControlsY-boardOriginY, color.RGBA{0, 0, 0, 170}, false)
+		vector.FillRect(screen, 0, boardOriginY, logicalWidth, playControlsY-boardOriginY, color.RGBA{0, 0, 0, 170}, false)
 		g.drawCenteredSystemText(screen, "PAUSED", 210, color.White)
 	}
 
-	vector.DrawFilledRect(screen, 0, playControlsY, logicalWidth, logicalHeight-playControlsY, color.RGBA{20, 20, 35, 235}, false)
+	vector.FillRect(screen, 0, playControlsY, logicalWidth, logicalHeight-playControlsY, color.RGBA{20, 20, 35, 235}, false)
 	labels := []string{"MENU", "PAUSE", "RESTART", "MUSIC"}
 	if g.paused {
 		labels[1] = "RESUME"
@@ -231,7 +215,7 @@ func (g *Game) drawPlayControls(screen *ebiten.Image) {
 	for i, label := range labels {
 		if i > 0 {
 			x := float32(i * playControlW)
-			vector.DrawFilledRect(screen, x, playControlsY+4, 1, logicalHeight-playControlsY-8, color.RGBA{180, 180, 200, 180}, false)
+			vector.FillRect(screen, x, playControlsY+4, 1, logicalHeight-playControlsY-8, color.RGBA{180, 180, 200, 180}, false)
 		}
 		g.drawSystemTextCenteredInRect(screen, label, i*playControlW, playControlsY, playControlW, logicalHeight-playControlsY, color.White)
 	}
@@ -252,42 +236,46 @@ func (g *Game) drawTileSelection(screen *ebiten.Image, boardX, boardY int, label
 	}
 	gold := color.RGBA{255, uint8(170 + phase*5), 0, 255}
 	if tint {
-		vector.DrawFilledRect(screen, x+4, y+4, w-8, h-8, color.RGBA{255, 210, 0, uint8(35 + phase)}, false)
+		vector.FillRect(screen, x+4, y+4, w-8, h-8, color.RGBA{255, 210, 0, uint8(35 + phase)}, false)
 	}
 	drawFrame(screen, x, y, w, h, 4, color.RGBA{0, 0, 0, 230})
 	drawFrame(screen, x+2, y+2, w-4, h-4, 2, gold)
 
 	// A numbered badge makes the selection order explicit without depending on
 	// color alone.
-	vector.DrawFilledRect(screen, x+3, y+3, 15, 18, gold, false)
-	vector.DrawFilledRect(screen, x+5, y+5, 11, 14, color.RGBA{15, 15, 20, 255}, false)
-	text.Draw(screen, label, basicfont.Face7x13, int(x)+7, int(y)+17, color.White)
+	vector.FillRect(screen, x+3, y+3, 15, 18, gold, false)
+	vector.FillRect(screen, x+5, y+5, 11, 14, color.RGBA{15, 15, 20, 255}, false)
+	g.drawSystemTextCenteredInRect(screen, label, int(x)+3, int(y)+3, 15, 18, color.White)
 }
 
 func drawFrame(screen *ebiten.Image, x, y, width, height, thickness float32, clr color.Color) {
-	vector.DrawFilledRect(screen, x, y, width, thickness, clr, false)
-	vector.DrawFilledRect(screen, x, y+height-thickness, width, thickness, clr, false)
-	vector.DrawFilledRect(screen, x, y+thickness, thickness, height-2*thickness, clr, false)
-	vector.DrawFilledRect(screen, x+width-thickness, y+thickness, thickness, height-2*thickness, clr, false)
+	vector.FillRect(screen, x, y, width, thickness, clr, false)
+	vector.FillRect(screen, x, y+height-thickness, width, thickness, clr, false)
+	vector.FillRect(screen, x, y+thickness, thickness, height-2*thickness, clr, false)
+	vector.FillRect(screen, x+width-thickness, y+thickness, thickness, height-2*thickness, clr, false)
 }
 
 func (g *Game) drawCenteredSystemText(screen *ebiten.Image, label string, baselineY int, clr color.Color) {
 	face := g.instrFace
 	if face == nil {
-		face = basicfont.Face7x13
+		return
 	}
-	w := font.MeasureString(face, label).Round()
-	text.Draw(screen, label, face, (logicalWidth-w)/2, baselineY, clr)
+	op := &text.DrawOptions{}
+	op.PrimaryAlign = text.AlignCenter
+	op.GeoM.Translate(logicalWidth/2, float64(baselineY)-face.Metrics().HAscent)
+	op.ColorScale.ScaleWithColor(clr)
+	text.Draw(screen, label, face, op)
 }
 
 func (g *Game) drawSystemTextCenteredInRect(screen *ebiten.Image, label string, x, y, w, h int, clr color.Color) {
 	face := g.instrFace
 	if face == nil {
-		face = basicfont.Face7x13
+		return
 	}
-	metrics := face.Metrics()
-	tw := font.MeasureString(face, label).Round()
-	th := metrics.Height.Round()
-	baseline := y + (h-th)/2 + metrics.Ascent.Round()
-	text.Draw(screen, label, face, x+(w-tw)/2, baseline, clr)
+	op := &text.DrawOptions{}
+	op.PrimaryAlign = text.AlignCenter
+	op.SecondaryAlign = text.AlignCenter
+	op.GeoM.Translate(float64(x)+float64(w)/2, float64(y)+float64(h)/2)
+	op.ColorScale.ScaleWithColor(clr)
+	text.Draw(screen, label, face, op)
 }

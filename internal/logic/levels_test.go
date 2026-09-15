@@ -12,7 +12,11 @@ func TestDecodeEmbeddedLevels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
 
 	levels, err := logic.DecodeLevels(f)
 	if err != nil {
@@ -30,5 +34,29 @@ func TestDecodeEmbeddedLevels(t *testing.T) {
 	}
 	if nonEmpty == 0 {
 		t.Fatal("decoded board is empty")
+	}
+}
+
+func TestEveryEmbeddedLevelStartsWithAMove(t *testing.T) {
+	f, err := resources.Files.Open("png/gamearea.img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	levels, err := logic.DecodeLevels(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for level := range levels.Boards {
+		var board logic.Board
+		board.FromLevel(levels.Boards[level], levels.PosList[level])
+		if _, _, _, _, _, ok := board.HelpSearch(); !ok {
+			t.Errorf("level %d starts without a removable pair", level)
+		}
 	}
 }

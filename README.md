@@ -19,7 +19,7 @@ This repository is a faithful Go/Ebiten port of the Atari ST puzzle game “Matc
 
 The Android launcher is configured for phones and tablets in sensor-landscape mode. The fixed 640x400 logical canvas scales uniformly to the available display, and all runtime assets are embedded in the Go library.
 
-Prerequisites: Go, `ebitenmobile`, Android SDK/API 36, Android NDK, JDK 17, and USB debugging enabled on the device. `ANDROID_HOME` or `ANDROID_SDK_ROOT` can be used for a non-standard SDK location.
+Prerequisites: Go, Android SDK/API 36, Android NDK, JDK 17, and USB debugging enabled on the device. The build script runs the `ebitenmobile` version matching `go.mod`; `ANDROID_HOME` or `ANDROID_SDK_ROOT` can be used for a non-standard SDK location.
 
 - Build, install, and launch the debug application on the connected device:
    ```sh
@@ -29,6 +29,7 @@ Prerequisites: Go, `ebitenmobile`, Android SDK/API 36, Android NDK, JDK 17, and 
    ```sh
    ./scripts/build-android-aar.sh
    ```
+  For a smaller Pixel-only artifact, use `MATCHIT_ANDROID_TARGET=android/arm64`; use `MATCHIT_KEEP_SYMBOLS=1` when collecting native profiles.
 - Build only the APK:
    ```sh
    cd android
@@ -50,6 +51,9 @@ The generated APK is `android/app/build/outputs/apk/debug/app-debug.apk`. High s
 
 ## Notes & Development
 - The game only reads PNG assets at runtime; keep originals in `old/` and out of git.
+- Runtime PNGs and all removal frames are uploaded to Ebitengine once during startup; do not create `ebiten.Image` objects from `Draw`.
+- The next available move is recalculated only when the board changes. Pathfinding uses fixed scratch storage and should remain allocation-free when its destination slice is reused.
+- The desktop launcher skips duplicate draws between 60 Hz updates; the mobile binding keeps Ebitengine's native presentation lifecycle.
 - Fonts: menu uses the original FONT2 PNGs; instructions use a readable system font.
 - Music stays running across screens; mute is global.
 - Manual checks after changes: asset converter runs cleanly; splash -> menu transition occurs at 3s; menu labels align on red bars; matching rules and help suggestions obey the 2-bend path; pause/mute work; score persists; highscores entry handles typing correctly.

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/png"
 	"io"
-	"os"
 )
 
 // LevelSet holds the 64 predefined boards bundled in GAMEAREA.IMG.
@@ -15,17 +14,6 @@ type LevelSet struct {
 	LevelTab [64]byte // randomized permutation as in make_leveltab
 	level    int      // current rotating index [0..63]
 	rng      *parkMiller
-}
-
-// LoadLevels loads the level table from a PNG dump of GAMEAREA.IMG (240x64 grayscale)
-// and prepares the level permutation like make_leveltab.
-func LoadLevels(path string) (*LevelSet, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return DecodeLevels(f)
 }
 
 // DecodeLevels decodes the level table from a PNG stream. Keeping decoding

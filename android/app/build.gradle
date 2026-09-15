@@ -49,6 +49,7 @@ tasks.register("buildEbitenAar", Exec) {
         include "go.mod", "go.sum", "assets/**", "internal/**", "mobile/**"
         exclude "**/*_test.go"
     })
+    inputs.file(new File(repositoryDir, "scripts/build-android-aar.sh"))
     outputs.file(generatedAar)
 }
 

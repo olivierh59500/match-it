@@ -4,17 +4,27 @@ import (
 	"image"
 	"image/color"
 	"log"
+	"math"
 	"strings"
 	"unicode"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	assets "github.com/olivierh59500/match-it/internal/assets"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
 )
+
+var instructionParagraphs = []string{
+	"REMOVE ALL TILES IN PAIRS.",
+	"ONLY IDENTICAL PAIRS MATCH.",
+	"SEASONS MATCH WITH SEASONS.",
+	"FLOWERS MATCH WITH FLOWERS.",
+	"A PATH WITH AT MOST TWO TURNS MUST CONNECT THE TWO TILES.",
+	"TOUCH OR CLICK TWO TILES. TAP THE HELP COUNTER FOR A HINT.",
+	"USE THE BOTTOM BAR FOR MENU, PAUSE, RESTART, AND MUSIC.",
+	"TOUCH ANYWHERE TO RETURN.",
+}
 
 func (g *Game) updateHighscores() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) || g.consumeAnyTap() {
@@ -124,83 +134,41 @@ func (g *Game) updateInstructions() error {
 func (g *Game) drawInstructions(screen *ebiten.Image) {
 	// Fill with the same menu green as main menu
 	screen.Fill(assets.STWordToRGBA(0x0020))
-	// Text content
-	paras := []string{
-		"REMOVE ALL TILES IN PAIRS.",
-		"ONLY IDENTICAL PAIRS MATCH.",
-		"SEASONS MATCH WITH SEASONS.",
-		"FLOWERS MATCH WITH FLOWERS.",
-		"A PATH WITH AT MOST TWO TURNS MUST CONNECT THE TWO TILES.",
-		"TOUCH OR CLICK TWO TILES. TAP THE HELP COUNTER FOR A HINT.",
-		"USE THE BOTTOM BAR FOR MENU, PAUSE, RESTART, AND MUSIC.",
-		"TOUCH ANYWHERE TO RETURN.",
-	}
 	// Use a readable system-safe font (Goregular at 16px) and center in both axes.
 	face := g.instrFace
 	if face == nil {
-		face = basicfont.Face7x13
+		return
 	}
-	lines := wrapFace(paras, face, 600)
+	lines := g.instructionLines
+	widths := g.instructionWidths
+	if len(lines) == 0 {
+		lines = wrapFace(instructionParagraphs, face, 600)
+		widths = make([]int, len(lines))
+		for i, line := range lines {
+			widths[i] = measureFace(face, line)
+		}
+	}
 	m := face.Metrics()
-	ascent := m.Ascent.Round()
-	height := m.Height.Round()
-	if height == 0 {
-		height = ascent + m.Descent.Round()
-	}
+	ascent := int(math.Round(m.HAscent))
+	height := int(math.Ceil(m.HAscent + m.HDescent + m.HLineGap))
 	vgap := height / 3
 	if vgap < 6 {
 		vgap = 6
 	}
 	totalH := len(lines)*height + (len(lines)-1)*vgap
 	y := (400-totalH)/2 + ascent
-	for _, ln := range lines {
-		w := measureFace(face, ln)
-		x := (640 - w) / 2
-		text.Draw(screen, ln, face, x, y, color.White)
+	for i, ln := range lines {
+		x := (640 - widths[i]) / 2
+		op := &text.DrawOptions{}
+		op.GeoM.Translate(float64(x), float64(y)-m.HAscent)
+		op.ColorScale.ScaleWithColor(color.White)
+		text.Draw(screen, ln, face, op)
 		y += height + vgap
 	}
 }
 
-// wrapChars8 wraps paragraphs into lines that fit maxW with given spacing/scale.
-func wrapChars8(paras []string, spacing, scale, maxW int) []string {
-	measure := func(s string) int {
-		if len(s) == 0 {
-			return 0
-		}
-		w := 0
-		for range s {
-			w += (8 + spacing) * scale
-		}
-		w -= spacing * scale
-		return w
-	}
-	out := []string{}
-	for _, p := range paras {
-		words := strings.Fields(p)
-		cur := ""
-		for _, w := range words {
-			try := w
-			if cur != "" {
-				try = cur + " " + w
-			}
-			if measure(try) <= maxW {
-				cur = try
-			} else {
-				if cur != "" {
-					out = append(out, cur)
-				}
-				cur = w
-			}
-		}
-		if cur != "" {
-			out = append(out, cur)
-		}
-	}
-	return out
-}
-
 // wrapFace wraps paragraphs using a font face to a given pixel width.
-func wrapFace(paras []string, face font.Face, maxW int) []string {
+func wrapFace(paras []string, face text.Face, maxW int) []string {
 	measure := func(s string) int { return measureFace(face, s) }
 	out := []string{}
 	for _, p := range paras {
@@ -228,11 +196,11 @@ func wrapFace(paras []string, face font.Face, maxW int) []string {
 }
 
 // measureFace returns pixel width of a string for a font face.
-func measureFace(face font.Face, s string) int {
-	return font.MeasureString(face, s).Round()
+func measureFace(face text.Face, s string) int {
+	return int(math.Round(text.Advance(s, face)))
 }
 
-func drawDigits(screen *ebiten.Image, digits [10]*image.RGBA, val int, x, y, max int) {
+func drawDigits(screen *ebiten.Image, digits [10]*ebiten.Image, val int, x, y, max int) {
 	// Convert to decimal string
 	s := itoaDec(val)
 	if len(s) > max {
@@ -240,14 +208,14 @@ func drawDigits(screen *ebiten.Image, digits [10]*image.RGBA, val int, x, y, max
 	}
 	for i := 0; i < len(s); i++ {
 		d := s[i] - '0'
-		if d < 0 || d > 9 {
+		if d > 9 {
 			continue
 		}
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Scale(2, 2)
 		op.GeoM.Translate(float64(x*2+i*16*2), float64(y*2))
 		if digits[int(d)] != nil {
-			screen.DrawImage(ebiten.NewImageFromImage(digits[int(d)]), op)
+			screen.DrawImage(digits[int(d)], op)
 		}
 	}
 }
@@ -313,7 +281,7 @@ func (g *Game) updateEnterName() error {
 		return nil
 	}
 	// Read typed characters (debounced by Ebiten), accept letters/digits/space
-	for _, r := range ebiten.InputChars() {
+	for _, r := range g.inputChars {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == ' ' {
 			g.appendName(unicode.ToUpper(r))
 		}
@@ -337,7 +305,7 @@ func (g *Game) updateEnterName() error {
 					g.submitEnteredName()
 				}
 			default:
-				g.appendName([]rune(value)[0])
+				g.appendName(rune(value[0]))
 			}
 		}
 	}
@@ -367,8 +335,8 @@ func (g *Game) drawNameKeyboard(screen *ebiten.Image) {
 		y := float32(key.rect.Min.Y)
 		w := float32(key.rect.Dx())
 		h := float32(key.rect.Dy())
-		vector.DrawFilledRect(screen, x, y, w, h, color.RGBA{225, 225, 235, 255}, false)
-		vector.DrawFilledRect(screen, x+2, y+2, w-4, h-4, color.RGBA{45, 45, 70, 255}, false)
+		vector.FillRect(screen, x, y, w, h, color.RGBA{225, 225, 235, 255}, false)
+		vector.FillRect(screen, x+2, y+2, w-4, h-4, color.RGBA{45, 45, 70, 255}, false)
 		g.drawSystemTextCenteredInRect(screen, key.label, key.rect.Min.X, key.rect.Min.Y, key.rect.Dx(), key.rect.Dy(), color.White)
 	}
 }

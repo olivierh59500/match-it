@@ -1,110 +1,150 @@
 package logic
 
-// PathFinder reproduces such_weg: find a path between two tiles in an 18x8 board
-// using an expanded 20x10 buffer with a one-tile border, allowing at most 2 bends.
-// Returns the path as a sequence of directions: 1=right, 2=left, 3=down, 4=up.
+const (
+	boardWidth       = 18
+	boardHeight      = 8
+	paddedWidth      = boardWidth + 2
+	paddedHeight     = boardHeight + 2
+	paddedCells      = paddedWidth * paddedHeight
+	pathDirections   = 5 // none, right, left, down, up
+	pathBendStates   = 3 // zero, one, or two bends
+	pathSearchStates = paddedCells * pathDirections * pathBendStates
+	maxPathLength    = paddedCells
+)
 
-// FindPath returns true if a valid path exists and writes the path into dst (len up to 18*8).
-func FindPath(board [18 * 8]byte, x1, y1, x2, y2 int, dst *[]byte) bool {
-    // Build padded buffer: 20x10, -1=blocked, 0=free.
-    const W, H = 18, 8
-    var pad [20 * 10]byte
-    for i := range pad {
-        pad[i] = 0xFF
-    }
-    // Copy board into pad at offset +1,+1 (index = (y+1)*20 + (x+1)). Free cells are 0; occupied cells are 0xFF.
-    for y := 0; y < H; y++ {
-        for x := 0; x < W; x++ {
-            v := board[y*W+x]
-            if v == 0 {
-                pad[(y+1)*20+(x+1)] = 0
-            } else {
-                pad[(y+1)*20+(x+1)] = 0xFF
-            }
-        }
-    }
-    // Treat the two tiles as free for path search.
-    sx, sy := x1+1, y1+1
-    tx, ty := x2+1, y2+1
-    pad[sy*20+sx] = 0
-    pad[ty*20+tx] = 0
+type pathState struct {
+	position  uint16
+	previous  int16
+	direction byte
+	bends     byte
+}
 
-    // Iterative search mirroring the original: explore straight lines in four directions,
-    // tracking the number of bends so far and recording paths; keep shortest.
-    type node struct{ x, y, dir, bends int; path []byte }
-    best := []byte(nil)
-    // Seed from start with no previous direction (0) and 0 bends.
-    stack := []node{{x: sx, y: sy, dir: 0, bends: 0, path: make([]byte, 0, 32)}}
-    visited := make(map[[3]int]int) // key: x,y,dir -> bends
+var pathSteps = [...]struct {
+	dx, dy    int
+	direction byte
+}{
+	{dx: 1, direction: 1},
+	{dx: -1, direction: 2},
+	{dy: 1, direction: 3},
+	{dy: -1, direction: 4},
+}
 
-    push := func(nd node) {
-        k := [3]int{nd.x, nd.y, nd.dir}
-        if b, ok := visited[k]; ok && b <= nd.bends {
-            return
-        }
-        visited[k] = nd.bends
-        stack = append(stack, nd)
-    }
+// FindPath finds the shortest path between two tiles through empty cells,
+// including the one-cell border around the board, with at most two bends.
+// Directions are encoded as 1=right, 2=left, 3=down, and 4=up.
+func FindPath(board [boardWidth * boardHeight]byte, x1, y1, x2, y2 int, dst *[]byte) bool {
+	var path [maxPathLength]byte
+	length, ok := findPath(board, x1, y1, x2, y2, path[:])
+	if !ok {
+		*dst = (*dst)[:0]
+		return false
+	}
+	*dst = append((*dst)[:0], path[:length]...)
+	return true
+}
 
-    for len(stack) > 0 {
-        nd := stack[len(stack)-1]
-        stack = stack[:len(stack)-1]
+// HasPath is the allocation-free reachability variant used when a caller does
+// not need the path itself.
+func HasPath(board [boardWidth * boardHeight]byte, x1, y1, x2, y2 int) bool {
+	_, ok := findPath(board, x1, y1, x2, y2, nil)
+	return ok
+}
 
-        // If reached target, record best (shortest path).
-        if nd.x == tx && nd.y == ty {
-            if best == nil || len(nd.path) < len(best) {
-                cp := make([]byte, len(nd.path))
-                copy(cp, nd.path)
-                best = cp
-            }
-            continue
-        }
-        if nd.bends >= 2 {
-            continue
-        }
+func findPath(board [boardWidth * boardHeight]byte, x1, y1, x2, y2 int, path []byte) (int, bool) {
+	if x1 < 0 || x1 >= boardWidth || y1 < 0 || y1 >= boardHeight ||
+		x2 < 0 || x2 >= boardWidth || y2 < 0 || y2 >= boardHeight {
+		return 0, false
+	}
 
-        // Explore 4 directions per original encoding: 1=right,2=left,3=down,4=up.
-        dirs := [][3]int{
-            {1, 0, 1},  // right
-            {-1, 0, 2}, // left
-            {0, 1, 3},  // down
-            {0, -1, 4}, // up
-        }
-        for _, d := range dirs {
-            dx, dy, code := d[0], d[1], d[2]
-            bends := nd.bends
-            if nd.dir != 0 && nd.dir != code {
-                bends++
-            }
-            if bends > 2 {
-                continue
-            }
-            // Walk straight until blocked; push each step to stack (like recursive advance + backtrack).
-            x, y := nd.x, nd.y
-            p := nd.path
-            for {
-                x += dx
-                y += dy
-                if x < 0 || y < 0 || x >= 20 || y >= 10 {
-                    break
-                }
-                if pad[y*20+x] != 0 && !(x == tx && y == ty) {
-                    break
-                }
-                // extend path by one step
-                p = append(p, byte(code))
-                push(node{x: x, y: y, dir: code, bends: bends, path: append([]byte(nil), p...)})
-                // stop at target; deeper steps will be handled by pop order.
-                if x == tx && y == ty {
-                    break
-                }
-            }
-        }
-    }
+	start := (y1+1)*paddedWidth + x1 + 1
+	target := (y2+1)*paddedWidth + x2 + 1
+	if start == target {
+		return 0, true
+	}
 
-    if best == nil {
-        return false
-    }
-    *dst = append((*dst)[:0], best...)
-    return true
+	// The outer border stays free. Occupied board cells are blocked except for
+	// the two endpoints.
+	var blocked [paddedCells]bool
+	for y := 0; y < boardHeight; y++ {
+		for x := 0; x < boardWidth; x++ {
+			position := (y+1)*paddedWidth + x + 1
+			blocked[position] = board[y*boardWidth+x] != 0
+		}
+	}
+	blocked[start] = false
+	blocked[target] = false
+
+	var queue [pathSearchStates]pathState
+	var visited [pathSearchStates]bool
+	queue[0] = pathState{position: uint16(start), previous: -1}
+	visited[pathVisitedIndex(start, 0, 0)] = true
+	head, tail := 0, 1
+	found := -1
+
+	for head < tail {
+		currentIndex := head
+		current := queue[head]
+		head++
+		position := int(current.position)
+		x, y := position%paddedWidth, position/paddedWidth
+
+		for _, step := range pathSteps {
+			nextX, nextY := x+step.dx, y+step.dy
+			if nextX < 0 || nextX >= paddedWidth || nextY < 0 || nextY >= paddedHeight {
+				continue
+			}
+			nextPosition := nextY*paddedWidth + nextX
+			if blocked[nextPosition] {
+				continue
+			}
+
+			bends := current.bends
+			if current.direction != 0 && current.direction != step.direction {
+				bends++
+			}
+			if bends > 2 {
+				continue
+			}
+			visitedIndex := pathVisitedIndex(nextPosition, step.direction, bends)
+			if visited[visitedIndex] {
+				continue
+			}
+			visited[visitedIndex] = true
+			queue[tail] = pathState{
+				position:  uint16(nextPosition),
+				previous:  int16(currentIndex),
+				direction: step.direction,
+				bends:     bends,
+			}
+			if nextPosition == target {
+				found = tail
+				break
+			}
+			tail++
+		}
+		if found >= 0 {
+			break
+		}
+	}
+
+	if found < 0 {
+		return 0, false
+	}
+	if path == nil {
+		return 0, true
+	}
+
+	length := 0
+	for index := found; queue[index].previous >= 0; index = int(queue[index].previous) {
+		path[length] = queue[index].direction
+		length++
+	}
+	for left, right := 0, length-1; left < right; left, right = left+1, right-1 {
+		path[left], path[right] = path[right], path[left]
+	}
+	return length, true
+}
+
+func pathVisitedIndex(position int, direction, bends byte) int {
+	return (position*pathDirections+int(direction))*pathBendStates + int(bends)
 }

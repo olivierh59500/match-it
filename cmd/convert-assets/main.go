@@ -43,8 +43,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer f.Close()
 		if err := png.Encode(f, img); err != nil {
+			_ = f.Close()
+			log.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("wrote assets/png/%s.png", name)

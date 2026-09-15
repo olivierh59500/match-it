@@ -1,6 +1,6 @@
 # Match'it — Go + Ebiten Port
 
-This repository is a faithful Go/Ebiten port of the Atari ST puzzle game “Match'it”. All original mechanics are preserved: board generation and progression, matching rules (identical tiles, seasons-with-seasons, flowers-with-flowers), the 2-bend path constraint, help logic, timing/bonuses, and removal animations. YM music plays via the bundled `Chambers of Shaolin - Trapped in China.ym`.
+This repository is a faithful Go/Ebiten port of the Atari ST puzzle game “Match'it”. All original mechanics are preserved: board generation and progression, matching rules (identical tiles, seasons-with-seasons, flowers-with-flowers), the 2-bend path constraint, help logic, timing/bonuses, and removal animations. YM music plays at 48 kHz via the bundled `Chambers of Shaolin - Trapped in China.ym`.
 
 ## How to Play
 - Clear the board by selecting pairs of tiles that can be connected with a path containing at most two right-angle turns.

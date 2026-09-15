@@ -19,6 +19,8 @@ import (
 	"golang.org/x/image/font/opentype"
 )
 
+const audioSampleRate = 48000
+
 // Game implements ebiten.Game. It reproduces the original flow:
 // menu -> gameplay (single player) -> highscores/instructions (later). For now, we focus on gameplay.
 type Game struct {
@@ -73,7 +75,6 @@ type Game struct {
 	// Controls
 	paused  bool
 	musicOn bool
-	prevVol float64
 
 	// Level/summary
 	stage            int
@@ -182,13 +183,13 @@ func (g *Game) initMusic() {
 	if g.audioCtx != nil {
 		return
 	}
-	g.audioCtx = audio.NewContext(44100)
+	g.audioCtx = audio.NewContext(audioSampleRate)
 	data, err := resources.Files.ReadFile("music/Chambers of Shaolin - Trapped in China.ym")
 	if err != nil {
 		log.Printf("music load: %v", err)
 		return
 	}
-	ym, err := audiox.NewYMPlayer(data, 44100, true)
+	ym, err := audiox.NewYMPlayer(data, audioSampleRate, true)
 	if err != nil {
 		log.Printf("ym init: %v", err)
 		return
@@ -639,20 +640,15 @@ func (g *Game) handleGlobalInput() {
 }
 
 func (g *Game) toggleMusic() {
-	if g.ym == nil {
+	if g.audioPlayer == nil {
 		return
 	}
 	if g.musicOn {
-		g.prevVol = g.ym.GetVolume()
-		g.ym.SetVolume(0)
+		g.audioPlayer.SetVolume(0)
 		g.musicOn = false
 		return
 	}
-	v := g.prevVol
-	if v <= 0 {
-		v = 0.7
-	}
-	g.ym.SetVolume(v)
+	g.audioPlayer.SetVolume(1)
 	g.musicOn = true
 }
 

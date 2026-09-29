@@ -38,9 +38,20 @@ Prerequisites: Go, Android SDK/API 36, Android NDK, JDK 17, and USB debugging en
 
 The generated APK is `android/app/build/outputs/apk/debug/app-debug.apk`. High scores are saved in the application's private Android files directory.
 
+## Presentation Video
+
+With FFmpeg installed with VP9 and Opus support, generate the deterministic desktop gameplay presentation with:
+
+```sh
+go run ./cmd/matchit-video
+```
+
+The command solves an embedded level, simulates the mouse selections, renders every frame from the original assets, synthesizes the YM soundtrack at 48 kHz, and writes `media/matchit-desktop-presentation.webm`. Use `-output`, `-crf`, `-audio-bitrate`, or `-audio-gain` to customize the result.
+
 ## Project Layout
 - `cmd/matchit/` — game entrypoint.
 - `cmd/convert-assets/` — converts original assets to PNG under `assets/png/` (levels, tiles, UI plates, fonts, help plates, remove masks).
+- `cmd/matchit-video/` — generates the VP9/Opus desktop presentation video.
 - `mobile/` — Ebitengine mobile binding package.
 - `android/` — native Android launcher and Gradle project.
 - `scripts/` — Android binding/build/install helpers.

@@ -204,7 +204,7 @@ func (g *Game) drawPlayControls(screen *ebiten.Image) {
 		g.drawCenteredSystemText(screen, "PAUSED", 210, color.White)
 	}
 
-	vector.FillRect(screen, 0, playControlsY, logicalWidth, logicalHeight-playControlsY, color.RGBA{20, 20, 35, 235}, false)
+	vector.FillRect(screen, 0, playControlsY, logicalWidth, logicalHeight-playControlsY, color.NRGBA{20, 20, 35, 235}, false)
 	labels := []string{"MENU", "PAUSE", "RESTART", "MUSIC"}
 	if g.paused {
 		labels[1] = "RESUME"
@@ -215,7 +215,7 @@ func (g *Game) drawPlayControls(screen *ebiten.Image) {
 	for i, label := range labels {
 		if i > 0 {
 			x := float32(i * playControlW)
-			vector.FillRect(screen, x, playControlsY+4, 1, logicalHeight-playControlsY-8, color.RGBA{180, 180, 200, 180}, false)
+			vector.FillRect(screen, x, playControlsY+4, 1, logicalHeight-playControlsY-8, color.NRGBA{180, 180, 200, 180}, false)
 		}
 		g.drawSystemTextCenteredInRect(screen, label, i*playControlW, playControlsY, playControlW, logicalHeight-playControlsY, color.White)
 	}
@@ -236,7 +236,9 @@ func (g *Game) drawTileSelection(screen *ebiten.Image, boardX, boardY int, label
 	}
 	gold := color.RGBA{255, uint8(170 + phase*5), 0, 255}
 	if tint {
-		vector.FillRect(screen, x+4, y+4, w-8, h-8, color.RGBA{255, 210, 0, uint8(35 + phase)}, false)
+		// NRGBA lets ScaleWithColor premultiply RGB by the translucent alpha;
+		// straight RGB values in color.RGBA would add excessive yellow light.
+		vector.FillRect(screen, x+4, y+4, w-8, h-8, color.NRGBA{255, 210, 0, uint8(35 + phase)}, false)
 	}
 	drawFrame(screen, x, y, w, h, 4, color.RGBA{0, 0, 0, 230})
 	drawFrame(screen, x+2, y+2, w-4, h-4, 2, gold)

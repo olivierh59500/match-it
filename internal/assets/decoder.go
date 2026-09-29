@@ -82,8 +82,10 @@ func DecodeScreenIMG(path string, width, height int, pal [16]color.RGBA) (*image
     return rgbaFromSTScreen(raw, width, height, pal)
 }
 
-// TileSetFromTilesIMG decodes tile atlas from TILES.IMG: 49 tiles of 8x20 pixels (43 tiles + 6 path glyphs).
+// TileSetFromTilesIMG decodes tile atlas from TILES.IMG: 49 tiles of 16x20 pixels (43 tiles + 6 path glyphs).
 // This uses the screen-order chunks (160 bytes per tile). Returns a 49-sprite slice.
+// Palette index 0 is an opaque artwork color, not a transparency key.
+// The removal animation applies its own separate transparency masks.
 func TileSetFromTilesIMG(path string, pal [16]color.RGBA) ([]*image.RGBA, error) {
     raw, err := os.ReadFile(path)
     if err != nil {
@@ -119,11 +121,7 @@ func TileSetFromTilesIMG(path string, pal [16]color.RGBA) ([]*image.RGBA, error)
                     if (p2 & mask) != 0 { c |= 4 }
                     if (p3 & mask) != 0 { c |= 8 }
                     x := bit
-                    col := pal[c]
-                    if c == 0 {
-                        col.A = 0 // treat palette index 0 as transparent for tile/path sprites
-                    }
-                    img.SetRGBA(x, y, col)
+                    img.SetRGBA(x, y, pal[c])
                 }
             }
         }
